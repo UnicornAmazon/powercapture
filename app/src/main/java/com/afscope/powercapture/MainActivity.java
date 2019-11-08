@@ -9,18 +9,25 @@ import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothProfile;
+import android.content.ContentResolver;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
 import android.graphics.PixelFormat;
 import android.hardware.Camera;
+import android.net.Uri;
 import android.os.Environment;
+import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.provider.Settings;
 import android.support.annotation.NonNull;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.util.Base64;
 import android.util.Log;
+import android.view.Display;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -28,10 +35,19 @@ import android.view.OrientationEventListener;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowId;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.widget.CheckBox;
+import android.widget.CompoundButton;
+import android.widget.FrameLayout;
+import android.widget.RelativeLayout;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
+
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -42,74 +58,121 @@ import java.util.function.Consumer;
 
 import pub.devrel.easypermissions.EasyPermissions;
 
-public class MainActivity extends AppCompatActivity implements SurfaceHolder.Callback,EasyPermissions.PermissionCallbacks, DialogInterface.OnDismissListener {
+public class MainActivity extends AppCompatActivity implements SurfaceHolder.Callback, EasyPermissions.PermissionCallbacks, DialogInterface.OnDismissListener, SeekBar.OnSeekBarChangeListener {
 
+    private static  String TAG ;
     private SurfaceView surfaceView;
     private Camera mCamera;//相机
     private int mCurrCameraFacing;//当前设置头类型,0:后置/1:前置
     private File mCaptureFile;//拍照保存的文件
     private SurfaceHolder mSurfaceHolder;
-    private int cameraCode=0;
+    private int cameraCode = 0;
     private int mOrientation;//当前屏幕旋转角度
     private int mWidthPixel, mHeightPixel;//SurfaceView的宽高
+    private CheckBox cbVibrator;
+    private boolean safeToTakePicture = false;
+    private SeekBar sbZoom;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        TAG=getClass().getSimpleName();
         requestPermiss();
     }
+
     private void requestPermiss() {
-        String[] perms = {Manifest.permission.CAMERA,Manifest.permission.WRITE_EXTERNAL_STORAGE,Manifest.permission.READ_EXTERNAL_STORAGE};
+        String[] perms = {Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE};
         if (EasyPermissions.hasPermissions(this, perms)) {
-             init();
+            init();
 
         } else {
             EasyPermissions.requestPermissions(this, "拍照需要摄像头权限",
                     cameraCode, perms);
         }
     }
+    public boolean onKeyDown(int keyCode, @NonNull KeyEvent event) {
+        switch (keyCode) {
 
-    private void init() {
+            case KeyEvent.KEYCODE_VOLUME_DOWN:
+                //音量下键切换摄像头
+                switchCamera();
+                return true;
 
-        Dialog dialog = new Dialog(this, R.style.dialog_style) {
-            @Override
-            public boolean onKeyDown(int keyCode, @NonNull KeyEvent event) {
-                switch (keyCode) {
-
-                    case KeyEvent.KEYCODE_VOLUME_DOWN:
-                        //音量下键切换摄像头
-                        switchCamera();
-                        return true;
-
-                    case KeyEvent.KEYCODE_VOLUME_UP:
-                        //音量上键拍照
-                        startCapture();
-                        Vibrator vibrator = (Vibrator)MainActivity.this.getSystemService(MainActivity.this.VIBRATOR_SERVICE);
-                        vibrator.vibrate(100);
-                        return true;
-                    case KeyEvent.KEYCODE_VOLUME_MUTE:
+            case KeyEvent.KEYCODE_VOLUME_UP:
+                //音量上键拍照
+                Log.i("jici", "onKeyDown: ");
+                startCapture();
+                return true;
+            case KeyEvent.KEYCODE_VOLUME_MUTE:
 //                        tv.setText("MUTE");
 
-                        return true;
+                return true;
 
-                }
-                return super.onKeyDown(keyCode, event);
-            }
-        };
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+    private void init() {
+        setContentView(R.layout.activity_main);
+        surfaceView = findViewById(R.id.surfaceview);
+        cbVibrator = findViewById(R.id.cb_vibrator);
+        sbZoom = (SeekBar) findViewById(R.id.sb_zoom);
+        sbZoom.setOnSeekBarChangeListener(this);
 
-        dialog.setContentView(R.layout.activity_main);
-        dialog.setOnDismissListener(this);
-        surfaceView = dialog.findViewById(R.id.surfaceview);
+        FrameLayout fr =  findViewById(R.id.fl);
+        RelativeLayout.LayoutParams layoutParams = (RelativeLayout.LayoutParams) fr.getLayoutParams();
+        layoutParams.width=250;
+        layoutParams.height=250;
+        layoutParams.addRule(RelativeLayout.ALIGN_PARENT_TOP);
+        fr.setLayoutParams(layoutParams);
+        Window window = getWindow();
+        WindowManager.LayoutParams lp = window.getAttributes();
+//        lp.screenBrightness = 0/ 255.0f;
+        lp.dimAmount = 0.2f;
+        window.setAttributes(lp);
         mSurfaceHolder = surfaceView.getHolder();
         mSurfaceHolder.addCallback(this);
-        dialog.show();
-        Window win = dialog.getWindow();
-        WindowManager.LayoutParams lp = win.getAttributes();
-        lp.width = 200;
-        lp.height = 200;
-        lp.dimAmount = 0.2f;
-        lp.gravity = Gravity.LEFT | Gravity.TOP;
-        win.setAttributes(lp);
+
+//        Dialog dialog = new Dialog(this, R.style.dialog_style) {
+//            @Override
+//            public boolean onKeyDown(int keyCode, @NonNull KeyEvent event) {
+//                switch (keyCode) {
+//
+//                    case KeyEvent.KEYCODE_VOLUME_DOWN:
+//                        //音量下键切换摄像头
+//                        switchCamera();
+//                        return true;
+//
+//                    case KeyEvent.KEYCODE_VOLUME_UP:
+//                        //音量上键拍照
+//                        Log.i("jici", "onKeyDown: ");
+//                        startCapture();
+//                        return true;
+//                    case KeyEvent.KEYCODE_VOLUME_MUTE:
+////                        tv.setText("MUTE");
+//
+//                        return true;
+//
+//                }
+//                return super.onKeyDown(keyCode, event);
+//            }
+//        };
+//
+//        dialog.setContentView(R.layout.activity_dialog);
+//        dialog.setOnDismissListener(this);
+//        surfaceView = dialog.findViewById(R.id.surfaceview);
+//        cbVibrator = dialog.findViewById(R.id.cb_vibrator);
+//        mSurfaceHolder = surfaceView.getHolder();
+//        mSurfaceHolder.addCallback(this);
+//        dialog.setCanceledOnTouchOutside(false);
+//        dialog.show();
+//        Window win = dialog.getWindow();
+//        WindowManager.LayoutParams lp = win.getAttributes();
+//        lp.width = 250;
+//        lp.height = 250;
+////        lp.screenBrightness = 0/ 255.0f;
+//        lp.dimAmount = 0.2f;
+//        lp.gravity = Gravity.LEFT | Gravity.TOP;
+//        win.setAttributes(lp);
     }
 
     /**
@@ -123,11 +186,11 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
         }
         openCamera();
         if (mCamera != null) {
-            setCameraParameters();
             updateCameraOrientation();
             try {
                 mCamera.setPreviewDisplay(mSurfaceHolder);
                 mCamera.startPreview();
+                safeToTakePicture = true;
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -138,13 +201,21 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
      * 开始拍照
      */
     public void startCapture() {
+        if (cbVibrator.isChecked()) {
+            Vibrator vibrator = (Vibrator) MainActivity.this.getSystemService(MainActivity.this.VIBRATOR_SERVICE);
+            vibrator.vibrate(100);
+        }
         if (null != mCamera) {
-            mCamera.autoFocus(new Camera.AutoFocusCallback() {
-                @Override
-                public void onAutoFocus(boolean success, Camera camera) {
-                    camera.takePicture(null, null, pictureCallback);
-                }
-            });
+//            mCamera.autoFocus(new Camera.AutoFocusCallback() {
+//                @Override
+//                public void onAutoFocus(boolean success, Camera camera) {
+//            mCamera.takePicture(null, null, pictureCallback);
+            if (safeToTakePicture) {
+                mCamera.takePicture(null, null, pictureCallback);
+                safeToTakePicture = false;
+            }
+//                }
+//            });
         }
     }
 
@@ -207,22 +278,33 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
     private final Camera.PictureCallback pictureCallback = new Camera.PictureCallback() {
 
         @Override
-        public void onPictureTaken(byte[] data, Camera camera) {
+        public void onPictureTaken(final byte[] data, Camera camera) {
             if (data != null) {
-                //解析生成相机返回的图片
-                Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
-                //生成缩略图
-                // Bitmap thumbnail= ThumbnailUtils.extractThumbnail(bm, 213, 213);
+                safeToTakePicture = true;
                 try {
-                    File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM);
-                    if (!dir.exists()) {
-                        dir.mkdirs();
-                    }
-                    mCaptureFile = new File(dir, System.currentTimeMillis() + ".jpg");
-                    BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(mCaptureFile));
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 100, bos);
-                    bos.flush();
-                    bos.close();
+                    new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            //解析生成相机返回的图片
+                            Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
+                            bitmap.copy(Bitmap.Config.ARGB_8888, true);
+                            //生成缩略图
+                            // Bitmap thumbnail= ThumbnailUtils.extractThumbnail(bm, 213, 213);
+                            File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM);
+                            if (!dir.exists()) {
+                                dir.mkdirs();
+                            }
+                            mCaptureFile = new File(dir, System.currentTimeMillis() + ".jpg");
+                            try {
+                                BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(mCaptureFile));
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, bos);
+                                bos.flush();
+                                bos.close();
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
+                        }
+                    }).start();
                 } catch (Exception e) {
                     e.printStackTrace();
                     Toast.makeText(MainActivity.this, "保存相片失败", Toast.LENGTH_SHORT).show();
@@ -236,6 +318,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
             camera.startPreview();
         }
     };
+
     /**
      * 启动屏幕朝向改变监听函数 用于在屏幕横竖屏切换时改变保存的图片的方向
      */
@@ -243,7 +326,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
         OrientationEventListener orientationEventListener = new OrientationEventListener(this) {
             @Override
             public void onOrientationChanged(int rotation) {
-                Log.i("lixiang", "onOrientationChanged: "+rotation);
+//                Log.i("lixiang", "onOrientationChanged: " + rotation);
                 if ((rotation >= 0 && rotation <= 45) || rotation > 315) {
                     rotation = 0;
                 } else if (rotation > 45 && rotation <= 135) {
@@ -262,6 +345,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
         };
         orientationEventListener.enable();
     }
+
     /**
      * 根据当前朝向修改保存图片的旋转角度
      */
@@ -290,6 +374,9 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
             e.printStackTrace();
         }
     }
+
+
+
     /**
      * 设置相机参数
      */
@@ -300,11 +387,15 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
 //            if (null != preViewSize) {
 //                params.setPreviewSize(preViewSize.width, preViewSize.height);
 //            }
-//
+
 //            Camera.Size pictureSize = getOptimalSize(params.getSupportedPictureSizes(), mWidthPixel, mHeightPixel);
 //            if (null != pictureSize) {
 //                params.setPictureSize(pictureSize.width, pictureSize.height);
 //            }
+            int maxZoom = params.getMaxZoom();
+//            List<Integer> zoomRatios = params.getZoomRatios();
+            sbZoom.setMax(maxZoom);
+
             //设置图片格式
             params.setPictureFormat(ImageFormat.JPEG);
             params.setJpegQuality(100);
@@ -316,7 +407,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
                 //支持自动聚焦模式
                 params.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
             }
-            if (null!=flashModes&&flashModes.contains(Camera.Parameters.FLASH_MODE_AUTO)) {
+            if (null != flashModes && flashModes.contains(Camera.Parameters.FLASH_MODE_AUTO)) {
                 params.setFlashMode(Camera.Parameters.FLASH_MODE_AUTO);
             }
             mCamera.setParameters(params);
@@ -325,8 +416,10 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
         }
 
     }
+
     /**
      * 获取最优尺寸
+     *
      * @param sizes
      * @param w
      * @param h
@@ -360,12 +453,13 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
                     optimalSize = size;
                     minDiff = Math.abs(size.height - targetHeight);
                 }
-                Log.d("lixiang", "getOptimalSize: width:" + size.width + " height:" + size.height + " minDiff:" + minDiff);
+                Log.d(TAG, "getOptimalSize: width:" + size.width + " height:" + size.height + " minDiff:" + minDiff);
             }
         }
 
         return optimalSize;
     }
+
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         Log.i("lixiang", "surfaceCreated: ");
@@ -376,6 +470,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
             if (null != mCamera) {
                 mCamera.setPreviewDisplay(mSurfaceHolder);
                 mCamera.startPreview();
+                safeToTakePicture = true;
                 setCameraParameters();
             }
         } catch (Exception e) {
@@ -416,5 +511,26 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
     @Override
     public void onDismiss(DialogInterface dialog) {
         finish();
+    }
+
+    @Override
+    public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+        Camera.Parameters parameters = mCamera.getParameters();
+        parameters.setZoom(progress);
+        mCamera.cancelAutoFocus();
+        //FOCUS_MODE_CONTINUOUS_PICTURE设置这种模式之后，持续对焦。
+        parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
+        mCamera.setParameters(parameters);
+    }
+
+    @Override
+    public void onStartTrackingTouch(SeekBar seekBar) {
+        Log.i(TAG, "onStartTrackingTouch: ");
+    }
+
+    @Override
+    public void onStopTrackingTouch(SeekBar seekBar) {
+        Log.i(TAG, "onStopTrackingTouch: ");
+
     }
 }
